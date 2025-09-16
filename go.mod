@@ -12,6 +12,7 @@ require (
 	github.com/gorilla/sessions v1.4.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/microcosm-cc/bluemonday v1.0.27
+	github.com/mileusna/useragent v1.3.5
 	github.com/oxffaa/gopher-parse-sitemap v0.0.0-20191021113419-005d2eb1def4
 	github.com/slyrz/warc v0.0.0-20150806225202-a50edd19b690
 	github.com/spf13/viper v1.20.1

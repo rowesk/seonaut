@@ -145,3 +145,29 @@ func TestHTTPError(t *testing.T) {
 		t.Fatal("expected an error, got none")
 	}
 }
+
+// Test UA name
+func TestUAName(t *testing.T) {
+	table := []struct {
+		UA   string
+		Name string
+	}{
+		{"Mozilla/5.0 (compatible; SEOnautBot/1.0; +https://seonaut.org/bot)", "SEOnautBot"},
+		{"Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; +http://www.google.com/bot.html) Chrome/W.X.Y.Z Safari/537.36", "Googlebot"},
+		{"Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Bingbot/2.0; +http://www.bing.com/bingbot.htm) Chrome/W.X.Y.Z Safari/537.36", "Bingbot"},
+	}
+
+	for _, e := range table {
+		options := &crawler.ClientOptions{
+			UserAgent: e.UA,
+		}
+
+		mockClient := &mockClient{ForceError: true}
+		client := crawler.NewBasicClient(options, mockClient)
+
+		if client.GetUAName() != e.Name {
+			t.Errorf("Expected UA name: %s got: %s", e.Name, client.GetUAName())
+		}
+
+	}
+}

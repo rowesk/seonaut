@@ -20,7 +20,7 @@ func (t *MockClient) Get(u string) (*crawler.ClientResponse, error) {
 	r := &http.Response{}
 	if strings.HasPrefix(u, "https://example.com/") {
 		body := `
-		User-Agent: *
+		User-Agent: SEOnautBot
 		Disallow: /disallowed
 		Sitemap: /sitemap.xml
 		`
@@ -34,8 +34,8 @@ func (t *MockClient) Get(u string) (*crawler.ClientResponse, error) {
 	return &crawler.ClientResponse{Response: r}, nil
 }
 
-func (t *MockClient) GetUA() string {
-	return "TEST UA"
+func (t *MockClient) GetUAName() string {
+	return "SEOnautBot"
 }
 
 // TestIsBlocked tests URLs allowed and disallowed in the robots.txt file.

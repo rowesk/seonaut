@@ -36,7 +36,7 @@ var ErrDomainNotAllowed = errors.New("domain not allowed")
 type Client interface {
 	Get(urlStr string) (*ClientResponse, error)
 	Head(urlStr string) (*ClientResponse, error)
-	GetUA() string
+	GetUAName() string
 }
 
 type ResponseCallback func(r *ResponseMessage)

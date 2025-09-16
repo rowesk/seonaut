@@ -34,7 +34,7 @@ func (r *RobotsChecker) IsBlocked(u *url.URL) bool {
 		path += "?" + u.Query().Encode()
 	}
 
-	return !robot.TestAgent(path, r.client.GetUA())
+	return !robot.TestAgent(path, r.client.GetUAName())
 }
 
 // Returns true if the robots.txt file exists and is valid

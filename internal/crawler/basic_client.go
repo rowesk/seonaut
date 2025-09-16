@@ -6,6 +6,8 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"time"
+
+	"github.com/mileusna/useragent"
 )
 
 type HTTPRequester interface {
@@ -15,6 +17,7 @@ type HTTPRequester interface {
 type BasicClient struct {
 	Options *ClientOptions
 	client  HTTPRequester
+	uaName  string
 }
 
 type ClientOptions struct {
@@ -25,10 +28,15 @@ type ClientOptions struct {
 }
 
 func NewBasicClient(options *ClientOptions, client HTTPRequester) *BasicClient {
-	return &BasicClient{
+	bc := &BasicClient{
 		Options: options,
 		client:  client,
 	}
+
+	parsedUA := useragent.Parse(options.UserAgent)
+	bc.uaName = parsedUA.Name
+
+	return bc
 }
 
 // Makes a request with the method specified in the method parameter to the specified URL.
@@ -97,7 +105,7 @@ func (c *BasicClient) do(req *http.Request) (*ClientResponse, error) {
 	return cr, nil
 }
 
-// GetUA returns the user-agent set for this client.
-func (c *BasicClient) GetUA() string {
-	return c.Options.UserAgent
+// GetUAName returns the user-agent name for this client.
+func (c *BasicClient) GetUAName() string {
+	return c.uaName
 }
