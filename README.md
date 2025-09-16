@@ -17,7 +17,58 @@ While it is possible to configure a custom database and compile SEOnaut manually
 
 ### Quick Start Guide
 
-To get started with SEOnaut, follow these steps to run it using Docker:
+#### Using docker compose
+
+Using docker is the recommended way of running SEOnaut. As you need to provide a database, you can use `docker compose` to do so creating a `docker-compose.yml` file like this:
+
+```yml
+services:
+  db:
+    image: mysql:8.4
+    container_name: "SEOnaut-db"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=seonaut
+      - MYSQL_USER=seonaut
+      - MYSQL_PASSWORD=seonaut
+    networks:
+      - seonaut_network
+
+  app:
+    image: ghcr.io/stjudewashere/seonaut:latest
+    container_name: "SEOnaut-app"
+    ports:
+      - "${SEONAUT_PORT:-9000}:9000"
+    depends_on:
+      - db
+    command: sh -c "/bin/wait && /app/seonaut"
+    environment:
+      - WAIT_HOSTS=db:3306
+      - WAIT_TIMEOUT=300
+      - WAIT_SLEEP_INTERVAL=30
+      - WAIT_HOST_CONNECT_TIMEOUT=30
+      # Seonaut config overrides
+      # - SEONAUT_SERVER_HOST=${SEONAUT_SERVER_HOST:-0.0.0.0}
+      # - SEONAUT_SERVER_PORT=${SEONAUT_INTERNAL_PORT:-9000}
+      # - SEONAUT_SERVER_URL=${SEONAUT_SERVER_URL:-http://localhost:${SEONAUT_PORT:-9000}}
+      # - SEONAUT_DATABASE_SERVER=${SEONAUT_DB_SERVER:-db}
+      # - SEONAUT_DATABASE_PORT=${SEONAUT_DB_PORT:-3306}
+      # - SEONAUT_DATABASE_USER=${SEONAUT_DB_USER:-seonaut}
+      # - SEONAUT_DATABASE_PASSWORD=${SEONAUT_DB_PASSWORD:-seonaut}
+      # - SEONAUT_DATABASE_DATABASE=${SEONAUT_DB_NAME:-seonaut}
+    networks:
+      - seonaut_network
+
+networks:
+  seonaut_network:
+    driver: bridge
+```
+
+This uses the default settings, which you can overwrite using environment variables if needed.
+
+#### Using docker from source code
+
+To run SEOnaut from source code, follow these steps to run it using Docker:
 
 1. **Install Docker**  
    Ensure Docker is installed on your system. You can download and install Docker from the [official website](https://www.docker.com/).

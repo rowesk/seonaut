@@ -17,7 +17,64 @@ Before installing SEOnaut, ensure the following are installed on your system:
 
 ## Installation Options
 
-### Using Docker
+### Using docker compose
+
+Using docker is the recommended way of running SEOnaut. As you need to provide a database, you can use `docker compose` to do so creating a `docker-compose.yml` file like this:
+
+```yml
+services:
+  db:
+    image: mysql:8.4
+    container_name: "SEOnaut-db"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=seonaut
+      - MYSQL_USER=seonaut
+      - MYSQL_PASSWORD=seonaut
+    networks:
+      - seonaut_network
+
+  app:
+    image: ghcr.io/stjudewashere/seonaut:latest
+    container_name: "SEOnaut-app"
+    ports:
+      - "${SEONAUT_PORT:-9000}:9000"
+    depends_on:
+      - db
+    command: sh -c "/bin/wait && /app/seonaut"
+    environment:
+      - WAIT_HOSTS=db:3306
+      - WAIT_TIMEOUT=300
+      - WAIT_SLEEP_INTERVAL=30
+      - WAIT_HOST_CONNECT_TIMEOUT=30
+      # Seonaut config overrides
+      # - SEONAUT_SERVER_HOST=${SEONAUT_SERVER_HOST:-0.0.0.0}
+      # - SEONAUT_SERVER_PORT=${SEONAUT_INTERNAL_PORT:-9000}
+      # - SEONAUT_SERVER_URL=${SEONAUT_SERVER_URL:-http://localhost:${SEONAUT_PORT:-9000}}
+      # - SEONAUT_DATABASE_SERVER=${SEONAUT_DB_SERVER:-db}
+      # - SEONAUT_DATABASE_PORT=${SEONAUT_DB_PORT:-3306}
+      # - SEONAUT_DATABASE_USER=${SEONAUT_DB_USER:-seonaut}
+      # - SEONAUT_DATABASE_PASSWORD=${SEONAUT_DB_PASSWORD:-seonaut}
+      # - SEONAUT_DATABASE_DATABASE=${SEONAUT_DB_NAME:-seonaut}
+    networks:
+      - seonaut_network
+
+networks:
+  seonaut_network:
+    driver: bridge
+```
+
+This will pull the latest SEOnaut image and run it with the default settings. You can overwrite the default settings using environment variables if needed.
+
+### Getting latest docker image
+
+In case you want to pull the latest image to use it in a different setting, you can pull it from the registry:
+
+```sh
+$ docker pull ghcr.io/stjudewashere/seonaut:latest
+```
+
+### Using docker from source code
 
 1. **Clone the Repository**  
    Clone the SEOnaut repository from GitHub:
