@@ -102,14 +102,15 @@ type RequestMessage struct {
 }
 
 type ResponseMessage struct {
-	URL       *url.URL
-	Response  *http.Response
-	Error     error
-	TTFB      int
-	Blocked   bool
-	InSitemap bool
-	Timeout   bool
-	Data      interface{}
+	URL              *url.URL
+	Response         *http.Response
+	Error            error
+	TTFB             int
+	Blocked          bool
+	InSitemap        bool
+	Timeout          bool
+	Data             interface{}
+	ScheduledForRetry bool  // True if this response is rate-limited and scheduled for retry
 }
 
 func NewCrawler(parsedURL *url.URL, options *Options, client Client) *Crawler {
@@ -179,6 +180,12 @@ func (c *Crawler) Start() {
 
 	for rm := range c.crawl() {
 		c.queue.Ack(rm.URL.String())
+
+		// Skip processing for responses scheduled for retry (rate-limited)
+		if rm.ScheduledForRetry {
+			log.Printf("Skipping processing for %s (scheduled for retry)", rm.URL.String())
+			continue
+		}
 
 		rm.InSitemap = c.sitemapStorage.Seen(rm.URL.String())
 		rm.Blocked = c.robotsChecker.IsBlocked(rm.URL)
@@ -333,6 +340,12 @@ func (c *Crawler) consumer(reqStream <-chan *RequestMessage, respStream chan<- *
 				log.Printf("Domain %s is rate-limited, requeuing request for %s (backoff: %v)", domain, requestMessage.URL.String(), backoffDuration)
 				// Push back to queue to try later
 				c.scheduleRetry(requestMessage, backoffDuration)
+				// Send a response marked for retry so it gets Acked but not processed
+				respStream <- &ResponseMessage{
+					URL:              requestMessage.URL,
+					Data:             requestMessage.Data,
+					ScheduledForRetry: true,
+				}
 				continue
 			}
 
@@ -386,6 +399,11 @@ func (c *Crawler) consumer(reqStream <-chan *RequestMessage, respStream chan<- *
                         
                         // Schedule retry for this specific request
                         c.scheduleRetry(requestMessage, backoff)
+                        
+                        // Mark this response as scheduled for retry
+                        // It will be Acked but not processed to avoid creating PageReports for 429s
+                        rm.ScheduledForRetry = true
+                        log.Printf("Response marked as scheduled for retry, will be Acked without processing")
                     } else {
                         // Successful response - clear rate limit for domain
                         c.clearDomainRateLimit(domain)
