@@ -3,10 +3,11 @@ package crawler
 import (
 	"context"
 	"errors"
-	"strconv"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -344,13 +345,19 @@ func (c *Crawler) consumer(reqStream <-chan *RequestMessage, respStream chan<- *
             if rm.Error == nil {
 				rm.Response = r.Response
 				rm.TTFB = r.TTFB
-                // Respect Retry-After on 429 Too Many Requests by scheduling a retry
-                if rm.Response != nil && rm.Response.StatusCode == http.StatusTooManyRequests {
-                    if d := parseRetryAfter(rm.Response.Header.Get("Retry-After")); d > 0 {
-                        c.scheduleRetry(requestMessage, d)
-                    } else {
-                        // Default small backoff with jitter
-                        c.scheduleRetry(requestMessage, time.Second+time.Duration(rand.Intn(500))*time.Millisecond)
+                // Enhanced rate limiting detection and Retry-After handling
+                if rm.Response != nil {
+                    if c.shouldRetryWithBackoff(rm.Response) {
+                        log.Printf("Rate limiting detected for %s (status: %d), scheduling retry", requestMessage.URL.String(), rm.Response.StatusCode)
+                        if d := parseRetryAfter(rm.Response.Header.Get("Retry-After")); d > 0 {
+                            log.Printf("Using Retry-After header: %v", d)
+                            c.scheduleRetry(requestMessage, d)
+                        } else {
+                            // Default backoff with jitter based on response type
+                            backoff := c.getDefaultBackoff(rm.Response)
+                            log.Printf("Using default backoff: %v", backoff)
+                            c.scheduleRetry(requestMessage, backoff)
+                        }
                     }
                 }
 			}
@@ -409,6 +416,93 @@ func parseRetryAfter(v string) time.Duration {
     return 0
 }
 
+// shouldRetryWithBackoff detects if a response indicates rate limiting or temporary blocking.
+func (c *Crawler) shouldRetryWithBackoff(resp *http.Response) bool {
+    // Standard 429 Too Many Requests
+    if resp.StatusCode == http.StatusTooManyRequests {
+        return true
+    }
+
+    // 503 Service Unavailable (often used for rate limiting)
+    if resp.StatusCode == http.StatusServiceUnavailable {
+        return true
+    }
+
+    // Cloudflare challenge detection
+    if c.isCloudflareChallenge(resp) {
+        return true
+    }
+
+    // Check for rate limiting headers even on non-429 responses
+    rateLimitHeaders := []string{
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "RateLimit-Limit",
+        "RateLimit-Remaining",
+        "RateLimit-Reset",
+    }
+
+    for _, header := range rateLimitHeaders {
+        if resp.Header.Get(header) != "" {
+            return true
+        }
+    }
+
+    return false
+}
+
+// isCloudflareChallenge detects Cloudflare challenge pages that indicate rate limiting.
+func (c *Crawler) isCloudflareChallenge(resp *http.Response) bool {
+    // Check for Cloudflare challenge indicators
+    if resp.Header.Get("Server") == "cloudflare" {
+        // Server-Timing header with challenge indicator (more flexible matching)
+        serverTiming := strings.ToLower(resp.Header.Get("Server-Timing"))
+        if strings.Contains(serverTiming, "chlray") || strings.Contains(serverTiming, "challenge") {
+            return true
+        }
+
+        // Cf-Mitigated header indicating challenge
+        cfMitigated := strings.ToLower(resp.Header.Get("Cf-Mitigated"))
+        if strings.Contains(cfMitigated, "challenge") {
+            return true
+        }
+
+        // CF-Ray header indicates Cloudflare is in the path
+        if resp.Header.Get("CF-Ray") != "" && resp.StatusCode == http.StatusForbidden {
+            return true
+        }
+
+        // Check for common challenge page indicators in title or meta
+        // This is a fallback for cases where headers aren't clear
+        if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusForbidden {
+            contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+            if strings.Contains(contentType, "text/html") {
+                // Additional check could be added here for HTML content analysis
+                // but for now, rely on the headers which are more reliable
+            }
+        }
+    }
+
+    return false
+}
+
+// getDefaultBackoff returns appropriate backoff duration based on response type.
+func (c *Crawler) getDefaultBackoff(resp *http.Response) time.Duration {
+    // Longer backoff for Cloudflare challenges
+    if c.isCloudflareChallenge(resp) {
+        return time.Duration(5+rand.Intn(10)) * time.Second
+    }
+
+    // Standard 429 or 503 responses
+    if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+        return time.Duration(2+rand.Intn(3)) * time.Second
+    }
+
+    // Default conservative backoff
+    return time.Duration(1+rand.Intn(2)) * time.Second
+}
+
 // scheduleRetry re-enqueues a request after a delay without marking it visited again.
 func (c *Crawler) scheduleRetry(req *RequestMessage, d time.Duration) {
     // Use a new RequestMessage to avoid races; keep Method/Data
@@ -419,6 +513,7 @@ func (c *Crawler) scheduleRetry(req *RequestMessage, d time.Duration) {
         case <-c.context.Done():
             return
         default:
+            log.Printf("Scheduling retry for %s after %v", req.URL.String(), d)
             c.queue.Push(rcopy)
         }
     })
