@@ -59,6 +59,13 @@ type Status struct {
 	Discovered int
 }
 
+// rateLimitState tracks rate limiting status per domain
+type rateLimitState struct {
+	backoffUntil        time.Time
+	consecutiveFailures int
+	lastBackoff         time.Duration
+}
+
 type Crawler struct {
 	Client           Client
 	status           Status
@@ -77,7 +84,9 @@ type Crawler struct {
 	cancel           context.CancelFunc
 	context          context.Context
 	callback         ResponseCallback
-    rateGate         <-chan time.Time
+	rateGate         <-chan time.Time
+	rateLimitStates  map[string]*rateLimitState
+	rateLimitMutex   sync.RWMutex
 }
 
 type ClientResponse struct {
@@ -111,21 +120,22 @@ func NewCrawler(parsedURL *url.URL, options *Options, client Client) *Crawler {
 
 	ctx, cancel := context.WithTimeout(context.Background(), crawlerTimeout*time.Hour)
 
-    c := &Crawler{
-		Client:         client,
-		status:         Status{Crawling: true},
-		url:            parsedURL,
-		options:        options,
-		queue:          NewQueue(),
-		storage:        NewURLStorage(),
-		sitemapStorage: NewURLStorage(),
-		sitemapChecker: sitemapChecker,
-		robotsChecker:  robotsChecker,
-		allowedDomains: map[string]bool{mainDomain: true, "www." + mainDomain: true},
-		mainDomain:     mainDomain,
-		cancel:         cancel,
-		context:        ctx,
-    }
+	c := &Crawler{
+		Client:          client,
+		status:          Status{Crawling: true},
+		url:             parsedURL,
+		options:         options,
+		queue:           NewQueue(),
+		storage:         NewURLStorage(),
+		sitemapStorage:  NewURLStorage(),
+		sitemapChecker:  sitemapChecker,
+		robotsChecker:   robotsChecker,
+		allowedDomains:  map[string]bool{mainDomain: true, "www." + mainDomain: true},
+		mainDomain:      mainDomain,
+		cancel:          cancel,
+		context:         ctx,
+		rateLimitStates: make(map[string]*rateLimitState),
+	}
 
     if options.RateLimit > 0 {
         // Token-like gate. time.Tick is acceptable here since crawler lifetime is bounded.
@@ -316,6 +326,16 @@ func (c *Crawler) consumer(reqStream <-chan *RequestMessage, respStream chan<- *
 	for {
 		select {
 		case requestMessage := <-reqStream:
+			domain := requestMessage.URL.Host
+
+			// Check if this domain is currently rate-limited
+			if backoffDuration := c.isDomainRateLimited(domain); backoffDuration > 0 {
+				log.Printf("Domain %s is rate-limited, requeuing request for %s (backoff: %v)", domain, requestMessage.URL.String(), backoffDuration)
+				// Push back to queue to try later
+				c.scheduleRetry(requestMessage, backoffDuration)
+				continue
+			}
+
             // Rate gate first, if enabled
             if c.rateGate != nil {
                 <-c.rateGate
@@ -348,16 +368,27 @@ func (c *Crawler) consumer(reqStream <-chan *RequestMessage, respStream chan<- *
                 // Enhanced rate limiting detection and Retry-After handling
                 if rm.Response != nil {
                     if c.shouldRetryWithBackoff(rm.Response) {
-                        log.Printf("Rate limiting detected for %s (status: %d), scheduling retry", requestMessage.URL.String(), rm.Response.StatusCode)
+                        log.Printf("Rate limiting detected for %s (status: %d)", requestMessage.URL.String(), rm.Response.StatusCode)
+                        
+                        // Determine backoff duration
+                        var backoff time.Duration
                         if d := parseRetryAfter(rm.Response.Header.Get("Retry-After")); d > 0 {
                             log.Printf("Using Retry-After header: %v", d)
-                            c.scheduleRetry(requestMessage, d)
+                            backoff = d
                         } else {
-                            // Default backoff with jitter based on response type
-                            backoff := c.getDefaultBackoff(rm.Response)
+                            backoff = c.getDefaultBackoff(rm.Response)
                             log.Printf("Using default backoff: %v", backoff)
-                            c.scheduleRetry(requestMessage, backoff)
                         }
+                        
+                        // Mark domain as rate-limited with exponential backoff
+                        backoff = c.markDomainRateLimited(domain, backoff)
+                        log.Printf("Domain %s marked as rate-limited for %v", domain, backoff)
+                        
+                        // Schedule retry for this specific request
+                        c.scheduleRetry(requestMessage, backoff)
+                    } else {
+                        // Successful response - clear rate limit for domain
+                        c.clearDomainRateLimit(domain)
                     }
                 }
 			}
@@ -503,6 +534,70 @@ func (c *Crawler) getDefaultBackoff(resp *http.Response) time.Duration {
     return time.Duration(1+rand.Intn(2)) * time.Second
 }
 
+// isDomainRateLimited checks if a domain is currently in backoff period.
+// Returns the remaining backoff duration, or 0 if not rate-limited.
+func (c *Crawler) isDomainRateLimited(domain string) time.Duration {
+    c.rateLimitMutex.RLock()
+    defer c.rateLimitMutex.RUnlock()
+    
+    if state, exists := c.rateLimitStates[domain]; exists {
+        remaining := time.Until(state.backoffUntil)
+        if remaining > 0 {
+            return remaining
+        }
+    }
+    return 0
+}
+
+// markDomainRateLimited marks a domain as rate-limited with exponential backoff.
+// Returns the actual backoff duration being applied (may be longer than requested due to exponential backoff).
+func (c *Crawler) markDomainRateLimited(domain string, baseBackoff time.Duration) time.Duration {
+    c.rateLimitMutex.Lock()
+    defer c.rateLimitMutex.Unlock()
+    
+    state, exists := c.rateLimitStates[domain]
+    if !exists {
+        state = &rateLimitState{}
+        c.rateLimitStates[domain] = state
+    }
+    
+    // Increment consecutive failures
+    state.consecutiveFailures++
+    
+    // Apply exponential backoff: each failure adds 2s, up to a max of 60s
+    actualBackoff := baseBackoff
+    if state.consecutiveFailures > 1 {
+        // Exponential increase: add 2s per additional failure
+        additionalBackoff := time.Duration(state.consecutiveFailures-1) * 2 * time.Second
+        actualBackoff = baseBackoff + additionalBackoff
+        
+        // Cap at 60 seconds
+        if actualBackoff > 60*time.Second {
+            actualBackoff = 60 * time.Second
+        }
+        
+        log.Printf("Domain %s has %d consecutive failures, increasing backoff from %v to %v", 
+            domain, state.consecutiveFailures, baseBackoff, actualBackoff)
+    }
+    
+    state.backoffUntil = time.Now().Add(actualBackoff)
+    state.lastBackoff = actualBackoff
+    
+    return actualBackoff
+}
+
+// clearDomainRateLimit clears the rate limit state for a domain after a successful request.
+func (c *Crawler) clearDomainRateLimit(domain string) {
+    c.rateLimitMutex.Lock()
+    defer c.rateLimitMutex.Unlock()
+    
+    if state, exists := c.rateLimitStates[domain]; exists && state.consecutiveFailures > 0 {
+        log.Printf("Domain %s rate limit cleared after successful request (was: %d failures)", 
+            domain, state.consecutiveFailures)
+        delete(c.rateLimitStates, domain)
+    }
+}
+
 // scheduleRetry re-enqueues a request after a delay without marking it visited again.
 func (c *Crawler) scheduleRetry(req *RequestMessage, d time.Duration) {
     // Use a new RequestMessage to avoid races; keep Method/Data
@@ -513,7 +608,7 @@ func (c *Crawler) scheduleRetry(req *RequestMessage, d time.Duration) {
         case <-c.context.Done():
             return
         default:
-            log.Printf("Scheduling retry for %s after %v", req.URL.String(), d)
+            log.Printf("Retrying %s after %v backoff", req.URL.String(), d)
             c.queue.Push(rcopy)
         }
     })
