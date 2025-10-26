@@ -177,6 +177,7 @@ func (s *CrawlerService) addCrawler(u *url.URL, p *models.Project, b *models.Bas
 		IncludeNoindex:  p.IncludeNoindex,
 		CrawlSitemap:    p.CrawlSitemap,
 		AllowSubdomains: p.AllowSubdomains,
+		RateLimit:       p.RateLimit,
 	}
 
 	mainDomain := strings.TrimPrefix(u.Host, "www.")

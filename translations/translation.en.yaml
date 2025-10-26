@@ -104,6 +104,10 @@ CUSTOM_USERAGENT_CHECKBOX: Custom User-Agent
 CUSTOM_USERAGENT_HELP: Set a custom User-Agent for SEOnaut's crawler when fetching URLs.
 ENTER_USERAGENT_LABEL: "Enter your custom User-Agent string:"
 USERAGENT_NOT_VALID: The User-Agent is not valid.
+CUSTOM_RATE_LIMIT_CHECKBOX: Custom rate limit
+CUSTOM_RATE_LIMIT_HELP: Limit the number of URLs crawled per second. Set to 0 for no limit.
+ENTER_RATE_LIMIT_LABEL: "Enter URLs per second:"
+RATE_LIMIT_NOT_VALID: The rate limit is not valid.
 
 # =============================================
 # CONTEXT: Edit project page. Contains the edit project form.

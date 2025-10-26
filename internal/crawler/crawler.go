@@ -3,6 +3,7 @@ package crawler
 import (
 	"context"
 	"errors"
+	"strconv"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -48,6 +49,7 @@ type Options struct {
 	IncludeNoindex  bool
 	CrawlSitemap    bool
 	AllowSubdomains bool
+    RateLimit       int
 }
 
 type Status struct {
@@ -74,6 +76,7 @@ type Crawler struct {
 	cancel           context.CancelFunc
 	context          context.Context
 	callback         ResponseCallback
+    rateGate         <-chan time.Time
 }
 
 type ClientResponse struct {
@@ -107,7 +110,7 @@ func NewCrawler(parsedURL *url.URL, options *Options, client Client) *Crawler {
 
 	ctx, cancel := context.WithTimeout(context.Background(), crawlerTimeout*time.Hour)
 
-	return &Crawler{
+    c := &Crawler{
 		Client:         client,
 		status:         Status{Crawling: true},
 		url:            parsedURL,
@@ -121,7 +124,18 @@ func NewCrawler(parsedURL *url.URL, options *Options, client Client) *Crawler {
 		mainDomain:     mainDomain,
 		cancel:         cancel,
 		context:        ctx,
-	}
+    }
+
+    if options.RateLimit > 0 {
+        // Token-like gate. time.Tick is acceptable here since crawler lifetime is bounded.
+        interval := time.Second / time.Duration(options.RateLimit)
+        if interval <= 0 {
+            interval = time.Second
+        }
+        c.rateGate = time.Tick(interval)
+    }
+
+    return c
 }
 
 // OnResponse sets the callback that the crawler will call for every response.
@@ -301,8 +315,18 @@ func (c *Crawler) consumer(reqStream <-chan *RequestMessage, respStream chan<- *
 	for {
 		select {
 		case requestMessage := <-reqStream:
-			// Add random delay to avoid overwhelming the servers with requests.
-			time.Sleep(time.Duration(rand.Intn(randomDelay)) * time.Millisecond)
+            // Rate gate first, if enabled
+            if c.rateGate != nil {
+                <-c.rateGate
+            }
+            // Add random delay to avoid overwhelming the servers with requests.
+            jitter := randomDelay
+            if c.rateGate != nil {
+                // Reduce jitter when explicit rate limiting is enabled
+                jitter = randomDelay / 3
+                if jitter < 50 { jitter = 50 }
+            }
+            time.Sleep(time.Duration(rand.Intn(jitter)) * time.Millisecond)
 
 			rm := &ResponseMessage{
 				URL:  requestMessage.URL,
@@ -317,9 +341,18 @@ func (c *Crawler) consumer(reqStream <-chan *RequestMessage, respStream chan<- *
 				r, rm.Error = c.Client.Head(requestMessage.URL.String())
 			}
 
-			if rm.Error == nil {
+            if rm.Error == nil {
 				rm.Response = r.Response
 				rm.TTFB = r.TTFB
+                // Respect Retry-After on 429 Too Many Requests by scheduling a retry
+                if rm.Response != nil && rm.Response.StatusCode == http.StatusTooManyRequests {
+                    if d := parseRetryAfter(rm.Response.Header.Get("Retry-After")); d > 0 {
+                        c.scheduleRetry(requestMessage, d)
+                    } else {
+                        // Default small backoff with jitter
+                        c.scheduleRetry(requestMessage, time.Second+time.Duration(rand.Intn(500))*time.Millisecond)
+                    }
+                }
 			}
 
 			respStream <- rm
@@ -356,6 +389,39 @@ func (c *Crawler) queueSitemapURLs() {
 			c.queue.Push(&RequestMessage{URL: u})
 		}
 	})
+}
+
+// parseRetryAfter parses an HTTP Retry-After header which can be seconds or an HTTP-date.
+func parseRetryAfter(v string) time.Duration {
+    if v == "" {
+        return 0
+    }
+    if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && secs >= 0 {
+        return time.Duration(secs) * time.Second
+    }
+    if t, err := http.ParseTime(v); err == nil {
+        d := time.Until(t)
+        if d < 0 {
+            return 0
+        }
+        return d
+    }
+    return 0
+}
+
+// scheduleRetry re-enqueues a request after a delay without marking it visited again.
+func (c *Crawler) scheduleRetry(req *RequestMessage, d time.Duration) {
+    // Use a new RequestMessage to avoid races; keep Method/Data
+    rcopy := &RequestMessage{URL: req.URL, IgnoreDomain: req.IgnoreDomain, Method: req.Method, Data: req.Data}
+    time.AfterFunc(d, func() {
+        // Push directly to queue, as URL has been marked seen already
+        select {
+        case <-c.context.Done():
+            return
+        default:
+            c.queue.Push(rcopy)
+        }
+    })
 }
 
 // Returns true if the crawler is allowed to crawl the domain, checking the allowedDomains slice.

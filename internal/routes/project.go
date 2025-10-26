@@ -138,9 +138,23 @@ func (h *projectHandler) addPostHandler(w http.ResponseWriter, r *http.Request) 
 		customUserAgent = false
 	}
 
+	customRateLimit, err := strconv.ParseBool(r.FormValue("custom_rate_limit"))
+	if err != nil {
+		customRateLimit = false
+	}
+
 	userAgent := h.Config.Crawler.Agent
 	if customUserAgent {
 		userAgent = r.FormValue("custom_user_agent_text")
+	}
+
+	rateLimit := 0
+	if customRateLimit {
+		if v := r.FormValue("custom_rate_limit_value"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				rateLimit = n
+			}
+		}
 	}
 
 	project := &models.Project{
@@ -154,6 +168,7 @@ func (h *projectHandler) addPostHandler(w http.ResponseWriter, r *http.Request) 
 		CheckExternalLinks: checkExternalLinks,
 		Archive:            archive,
 		UserAgent:          userAgent,
+		RateLimit:          rateLimit,
 	}
 
 	err = h.ProjectService.SaveProject(project, user.Id)
@@ -328,6 +343,20 @@ func (h *projectHandler) editPostHandler(w http.ResponseWriter, r *http.Request)
 		p.UserAgent = r.FormValue("custom_user_agent_text")
 	} else {
 		p.UserAgent = h.Config.Crawler.Agent
+	}
+
+	customRateLimit, err := strconv.ParseBool(r.FormValue("custom_rate_limit"))
+	if err != nil {
+		customRateLimit = false
+	}
+
+	p.RateLimit = 0
+	if customRateLimit {
+		if v := r.FormValue("custom_rate_limit_value"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				p.RateLimit = n
+			}
+		}
 	}
 
 	err = h.ProjectService.UpdateProject(&p)

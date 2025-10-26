@@ -19,4 +19,5 @@ type Project struct {
 	CheckExternalLinks bool
 	Archive            bool
 	UserAgent          string
+    RateLimit          int
 }

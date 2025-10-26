@@ -25,6 +25,27 @@
 				</div>
 			</div>
 		</div>
+
+		<div class="box soft">
+			<div class="col col-main">
+				<div class="content">
+					<div class="toggle-container">
+						<label class="toggle" >
+							<input type="checkbox" value="1" name="custom_rate_limit" id="custom_rate_limit">
+							<span class="slider"></span>
+						</label>
+						<span class="label">{{ trans "CUSTOM_RATE_LIMIT_CHECKBOX" }}</span>
+					</div>
+					<div class="toggle-help">
+						<p>{{ trans "CUSTOM_RATE_LIMIT_HELP" }}</p>
+						<div id="rate_limit_input">
+							<label for="custom_rate_limit_value">{{ trans "ENTER_RATE_LIMIT_LABEL" }}</label>
+							<input type="number" min="0" step="1" name="custom_rate_limit_value" value="0" required>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
 		
 		<div class="box soft">
 			<div class="col col-main">
@@ -202,12 +223,22 @@
 	let userAgentInput = document.getElementById('user_agent_input');
 	let toggleUserAgentInput = checked => userAgentInput.style.display = checked ? 'block' : 'none';
 
+	let rateLimit = document.getElementById('custom_rate_limit');
+	let rateLimitInput = document.getElementById('rate_limit_input');
+	let toggleRateLimitInput = checked => rateLimitInput.style.display = checked ? 'block' : 'none';
+
 	// Initially hide the input if checkbox is not checked
 	{{ if .Data.UserAgentError }}userAgent.checked = true;{{ end }}
 	toggleUserAgentInput(userAgent.checked)
+	// Initially hide the input for rate limit
+	toggleRateLimitInput(rateLimit.checked)
 
 	userAgent.addEventListener('change', function(e) {
 		toggleUserAgentInput(e.currentTarget.checked);
+	});
+
+	rateLimit.addEventListener('change', function(e) {
+		toggleRateLimitInput(e.currentTarget.checked);
 	});
 </script>
 
